@@ -224,7 +224,7 @@ bool free_commands_list(List *commands_list)
     return free_list(commands_list);
 }
 
-List *load_commands_list(char commands_paths[][64])
+List *load_commands_list(char commands_paths[][64], int commands_length)
 {
     List *commands_list = NULL;
 
@@ -237,7 +237,7 @@ List *load_commands_list(char commands_paths[][64])
     }
 
     // for (size_t i = 0; i < sizeof(commands_paths) / sizeof(commands_paths[0]); i++)
-    for (size_t i = 0; i < 3; i++)
+    for (size_t i = 0; i < commands_length; i++)
     {
         Command *command = create_command();
 
@@ -363,12 +363,13 @@ int main()
      * * store it in the commands array
      */
 
+    int commands_length = 4;
     char commands_paths[][64] = {"./commands/handle-add-rule.so",
                                  "./commands/handle-delete-rule.so",
                                  "./commands/handle-server-shutdown.so",
                                  "./commands/handle-list-rule.so"};
 
-    commands_list = load_commands_list(commands_paths);
+    commands_list = load_commands_list(commands_paths, commands_length);
 
     list_commands(commands_list);
 
