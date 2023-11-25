@@ -9,6 +9,8 @@
 
 #include <dlfcn.h>
 
+#include <dirent.h>
+
 #include "utils/list-utils.h"
 #include "utils/network-utils.h"
 #include "utils/function-utils.h"
@@ -23,8 +25,8 @@
 
 #define LOGGING true
 
-List *rules_list;
-List *commands_list;
+List *rules_list = NULL;
+List *commands_list = NULL;
 
 void print_command(Command *command)
 {
@@ -198,9 +200,13 @@ bool free_command(Command *command)
             printf("[free_command()]: unable to close command file with dlclose.\n");
         }
         command->file = NULL;
+        command->handler = NULL;
     }
 
     free(command);
+
+    // useless
+    command = NULL;
 
     return true;
 }
@@ -224,11 +230,9 @@ bool free_commands_list(List *commands_list)
     return free_list(commands_list);
 }
 
-List *load_commands_list(char commands_paths[][64], int commands_length)
+List *load_commands_list()
 {
     List *commands_list = NULL;
-
-    commands_list = create_list();
 
     if (commands_list == NULL)
     {
@@ -236,28 +240,54 @@ List *load_commands_list(char commands_paths[][64], int commands_length)
         return NULL;
     }
 
-    // for (size_t i = 0; i < sizeof(commands_paths) / sizeof(commands_paths[0]); i++)
-    for (size_t i = 0; i < commands_length; i++)
-    {
-        Command *command = create_command();
+    DIR *commands_directory;
+    struct dirent *directory_entry;
 
-        if (command == NULL)
+    // open the commands directory
+    commands_directory = opendir("./commands");
+
+    if (commands_directory == NULL)
+    {
+        perror("[load_commands_list] ERROR, unable to open the commands directory.");
+        return NULL;
+    }
+
+    commands_list = create_list();
+
+    // for (size_t i = 0; i < sizeof(commands_paths) / sizeof(commands_paths[0]); i++)
+    while ((directory_entry = readdir(commands_directory)) != NULL)
+    {
+        if (string_ends_with(directory_entry->d_name, ".so") == false)
         {
-            printf("[load_commands_list()]: failed to create_command() for %s\n", commands_paths[i]);
+            printf("[load_commands_list]: ignored (./commands/%s), not a shared object file.\n", directory_entry->d_name);
             continue;
         }
 
-        snprintf(command->path, MAX_COMMAND_PATH_LENGTH, "%s", commands_paths[i]);
+        Command *command = NULL;
+
+        command = create_command();
+
+        char command_path[512];
+
+        snprintf(command_path, 512, "./commands/%s", directory_entry->d_name);
+
+        if (command == NULL)
+        {
+            printf("[load_commands_list()]: failed to create_command() for %s\n", command_path);
+            continue;
+        }
+
+        snprintf(command->path, MAX_COMMAND_PATH_LENGTH, "%s", command_path);
         // command->name;
-        // snprintf(command->name, MAX_COMMAND_NAME_LENGTH, "%s", commands_paths[i]);
+        // snprintf(command->name, MAX_COMMAND_NAME_LENGTH, "%s", command_path);
         command->handler = NULL;
         command->file = NULL;
 
-        command->file = dlopen(commands_paths[i], RTLD_LAZY);
+        command->file = dlopen(command_path, RTLD_LAZY);
 
         if (command->file == NULL)
         {
-            printf("[load_commands_list()]: command_file for (%s) NOT FOUND\n", commands_paths[i]);
+            printf("[load_commands_list()]: command_file for (%s) NOT FOUND\n", command_path);
             free_command(command);
             continue;
         }
@@ -272,7 +302,7 @@ List *load_commands_list(char commands_paths[][64], int commands_length)
 
         if (command->name == NULL)
         {
-            printf("[load_commands_list()]: command (%s) don't have a name\n", commands_paths[i]);
+            printf("[load_commands_list()]: command (%s) don't have a name\n", command_path);
             free_command(command);
             continue;
         }
@@ -288,7 +318,7 @@ List *load_commands_list(char commands_paths[][64], int commands_length)
             /**
              * TODO: give more details about the command that is using this name.
              */
-            printf("[load_commands_list()]: command name (%s) is already used by another command, aborting actual command.\n", commands_paths[i]);
+            printf("[load_commands_list()]: command name (%s) is already used by another command, aborting actual command.\n", command_path);
             free_command(command);
             continue;
         }
@@ -297,7 +327,7 @@ List *load_commands_list(char commands_paths[][64], int commands_length)
 
         if (command->handler == NULL)
         {
-            printf("[load_commands_list()]: handler for (%s) NOT FOUND\n", commands_paths[i]);
+            printf("[load_commands_list()]: handler for (%s) NOT FOUND\n", command_path);
             free_command(command);
             continue;
         }
@@ -306,7 +336,7 @@ List *load_commands_list(char commands_paths[][64], int commands_length)
 
         if (node == NULL)
         {
-            printf("[load_commands_list()]: node allocation for (%s) FAILED\n", commands_paths[i]);
+            printf("[load_commands_list()]: node allocation for (%s) FAILED\n", command_path);
             free_command(command);
             continue;
         }
@@ -315,14 +345,21 @@ List *load_commands_list(char commands_paths[][64], int commands_length)
 
         if (insertion_result == false)
         {
-            printf("[load_commands_list()]: command insertion for (%s) into commands_list failed\n", commands_paths[i]);
+            printf("[load_commands_list()]: command insertion for (%s) into commands_list failed\n", command_path);
             free_command(command);
             free_node(node);
             continue;
         }
 
+        printf("[load_commands_list]: loaded command (%s).\n", command->name);
+
+        /**
+         * IMPORTANT: when you free a command you have to close the command_file
+         */
         // dlclose(command->file);
     }
+
+    closedir(commands_directory);
 
     return commands_list;
 }
@@ -347,11 +384,10 @@ void list_commands(List *commands_list)
 
 int main()
 {
-
     rules_list = create_list();
     /**
-     * dlopen, dlsym, dlclose
-     * LoadLibrary, GetProcAddress, FreeLibrary
+     * linux: dlopen, dlsym, dlclose
+     * windows: LoadLibrary, GetProcAddress, FreeLibrary
      */
 
     /**
@@ -363,21 +399,21 @@ int main()
      * * store it in the commands array
      */
 
-    int commands_length = 4;
-    char commands_paths[][64] = {"./commands/handle-add-rule.so",
-                                 "./commands/handle-delete-rule.so",
-                                 "./commands/handle-server-shutdown.so",
-                                 "./commands/handle-list-rule.so"};
+    if (rules_list == NULL)
+    {
+        printf("[system]: something went wrong while allocating rules_list\n");
+        exit(EXIT_FAILURE);
+    }
 
-    commands_list = load_commands_list(commands_paths, commands_length);
-
-    list_commands(commands_list);
+    commands_list = load_commands_list();
 
     if (commands_list == NULL)
     {
-        printf("[system]: failed to load commands.\n");
+        printf("[system]: something went wrong while loading commands.\n");
         exit(EXIT_FAILURE);
     }
+
+    list_commands(commands_list);
 
     bool running;
     int server_socket, client_socket;
